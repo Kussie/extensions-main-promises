@@ -2386,7 +2386,7 @@ __exportStar(require("./SearchFilter"), exports);
 (function (Buffer){(function (){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.setStateData = exports.retrieveStateData = exports.getKomgaAPI = exports.getAuthorizationString = exports.searchRequest = exports.getServerUnavailableMangaTiles = void 0;
+exports.setStateData = exports.retrieveStateData = exports.getOptions = exports.getKomgaAPI = exports.getAuthorizationString = exports.searchRequest = exports.getServerUnavailableMangaTiles = void 0;
 function getServerUnavailableMangaTiles() {
     // This tile is used as a placeholder when the server is unavailable
     return [
@@ -2403,6 +2403,7 @@ async function searchRequest(searchQuery, metadata, requestManager, stateManager
     // This function is also called when the user search in an other source. It should not throw if the server is unavailable.
     // We won't use `await this.getKomgaAPI()` as we do not want to throw an error
     const komgaAPI = await getKomgaAPI(stateManager);
+    const { orderResultsAlphabetically } = await getOptions(stateManager);
     if (komgaAPI === null) {
         console.log("searchRequest failed because server settings are unset");
         return createPagedResults({
@@ -2423,7 +2424,19 @@ async function searchRequest(searchQuery, metadata, requestManager, stateManager
             if (tag.id.substr(0, 6) == "genre-") {
                 paramsList.push("genre=" + encodeURIComponent(tag.id.substring(6)));
             }
+            if (tag.id.substr(0, 11) == "collection-") {
+                paramsList.push("collection_id=" + encodeURIComponent(tag.id.substring(11)));
+            }
+            if (tag.id.substr(0, 8) == "library-") {
+                paramsList.push("library_id=" + encodeURIComponent(tag.id.substring(8)));
+            }
         });
+    }
+    if (orderResultsAlphabetically) {
+        paramsList.push("sort=titleSort");
+    }
+    else {
+        paramsList.push("sort=lastModified,desc");
     }
     let paramsString = "";
     if (paramsList.length > 0) {
@@ -2469,6 +2482,9 @@ const DEFAULT_KOMGA_SERVER_ADDRESS = 'https://api.paperback.moe';
 const DEFAULT_KOMGA_API = DEFAULT_KOMGA_SERVER_ADDRESS + '/api/v1';
 const DEFAULT_KOMGA_USERNAME = '';
 const DEFAULT_KOMGA_PASSWORD = '';
+const DEFAULT_SHOW_ON_DECK = false;
+const DEFAULT_SORT_RESULTS_ALPHABETICALLY = true;
+const DEFAULT_SHOW_CONTINUE_READING = false;
 async function getAuthorizationString(stateManager) {
     return await stateManager.keychain.retrieve('authorization') ?? '';
 }
@@ -2477,18 +2493,29 @@ async function getKomgaAPI(stateManager) {
     return await stateManager.retrieve('komgaAPI') ?? DEFAULT_KOMGA_API;
 }
 exports.getKomgaAPI = getKomgaAPI;
+async function getOptions(stateManager) {
+    const showOnDeck = await stateManager.retrieve('showOnDeck') ?? DEFAULT_SHOW_ON_DECK;
+    const orderResultsAlphabetically = await stateManager.retrieve('orderResultsAlphabetically') ?? DEFAULT_SORT_RESULTS_ALPHABETICALLY;
+    const showContinueReading = await stateManager.retrieve('showContinueReading') ?? DEFAULT_SHOW_CONTINUE_READING;
+    return { showOnDeck, orderResultsAlphabetically, showContinueReading };
+}
+exports.getOptions = getOptions;
 async function retrieveStateData(stateManager) {
     // Return serverURL, serverUsername and serverPassword saved in the source.
     // Used to show already saved data in settings
     const serverURL = await stateManager.retrieve('serverAddress') ?? DEFAULT_KOMGA_SERVER_ADDRESS;
     const serverUsername = await stateManager.keychain.retrieve('serverUsername') ?? DEFAULT_KOMGA_USERNAME;
     const serverPassword = await stateManager.keychain.retrieve('serverPassword') ?? DEFAULT_KOMGA_PASSWORD;
-    return { serverURL, serverUsername, serverPassword };
+    const showOnDeck = await stateManager.retrieve('showOnDeck') ?? DEFAULT_SHOW_ON_DECK;
+    const orderResultsAlphabetically = await stateManager.retrieve('orderResultsAlphabetically') ?? DEFAULT_SORT_RESULTS_ALPHABETICALLY;
+    const showContinueReading = await stateManager.retrieve('showContinueReading') ?? DEFAULT_SHOW_CONTINUE_READING;
+    return { serverURL, serverUsername, serverPassword, showOnDeck, orderResultsAlphabetically, showContinueReading };
 }
 exports.retrieveStateData = retrieveStateData;
 async function setStateData(stateManager, data) {
     await setKomgaServerAddress(stateManager, data['serverAddress'] ?? DEFAULT_KOMGA_SERVER_ADDRESS);
     await setCredentials(stateManager, data['serverUsername'] ?? DEFAULT_KOMGA_USERNAME, data['serverPassword'] ?? DEFAULT_KOMGA_PASSWORD);
+    await setOptions(stateManager, data['showOnDeck'] ?? DEFAULT_SHOW_ON_DECK, data['orderResultsAlphabetically'] ?? DEFAULT_SORT_RESULTS_ALPHABETICALLY, data['showContinueReading'] ?? DEFAULT_SHOW_CONTINUE_READING);
 }
 exports.setStateData = setStateData;
 async function setKomgaServerAddress(stateManager, apiUri) {
@@ -2499,6 +2526,11 @@ async function setCredentials(stateManager, username, password) {
     await stateManager.keychain.store('serverUsername', username);
     await stateManager.keychain.store('serverPassword', password);
     await stateManager.keychain.store('authorization', createAuthorizationString(username, password));
+}
+async function setOptions(stateManager, showOnDeck, orderResultsAlphabetically, showContinueReading) {
+    await stateManager.store('showOnDeck', showOnDeck);
+    await stateManager.store('orderResultsAlphabetically', orderResultsAlphabetically);
+    await stateManager.store('showContinueReading', showContinueReading);
 }
 function createAuthorizationString(username, password) {
     return 'Basic ' + Buffer.from(username + ':' + password, 'binary').toString('base64');
@@ -2587,7 +2619,7 @@ const Common_1 = require("./Common");
 //  - getTags() which is called on the homepage
 //  - search method which is called even if the user search in an other source
 exports.PaperbackInfo = {
-    version: "1.2.5",
+    version: "1.2.9",
     name: "Paperback",
     icon: "icon.png",
     author: "Lemon | Faizan Durrani",
@@ -2637,6 +2669,15 @@ class KomgaRequestInterceptor {
         return response;
     }
     async interceptRequest(request) {
+        // NOTE: Doing it like this will make downloads work tried every other method did not work, if there is a better method make edit it and make pull request
+        if (request.url.includes('intercept*')) {
+            const url = request?.url?.split('*').pop() ?? '';
+            request.headers = {
+                'authorization': await (0, Common_1.getAuthorizationString)(this.stateManager)
+            };
+            request.url = url;
+            return request;
+        }
         if (request.headers === undefined) {
             request.headers = {};
         }
@@ -2675,26 +2716,36 @@ class Paperback extends paperback_extensions_common_1.Source {
     }
     async getTags() {
         // This function is called on the homepage and should not throw if the server is unavailable
-        // We define two types of tags:
+        // We define four types of tags:
         // - `genre`
         // - `tag`
+        // - `collection`
+        // - `library`
         // To be able to make the difference between theses types, we append `genre-` or `tag-` at the beginning of the tag id
-        // TODO: we could add: collections
-        let genresResponse;
-        let tagsResponse;
+        let genresResponse, tagsResponse, collectionResponse, libraryResponse;
         // We try to make the requests. If this fail, we return a placeholder tags list to inform the user and prevent the function from throwing an error
         try {
             const komgaAPI = await (0, Common_1.getKomgaAPI)(this.stateManager);
             const genresRequest = createRequestObject({
-                url: `${komgaAPI}/genres/`,
+                url: `${komgaAPI}/genres`,
                 method: "GET",
             });
             genresResponse = await this.requestManager.schedule(genresRequest, 1);
             const tagsRequest = createRequestObject({
-                url: `${komgaAPI}/tags/series/`,
+                url: `${komgaAPI}/tags/series`,
                 method: "GET",
             });
             tagsResponse = await this.requestManager.schedule(tagsRequest, 1);
+            const collectionRequest = createRequestObject({
+                url: `${komgaAPI}/collections`,
+                method: "GET",
+            });
+            collectionResponse = await this.requestManager.schedule(collectionRequest, 1);
+            const libraryRequest = createRequestObject({
+                url: `${komgaAPI}/libraries`,
+                method: "GET",
+            });
+            libraryResponse = await this.requestManager.schedule(libraryRequest, 1);
         }
         catch (error) {
             console.log(`getTags failed with error: ${error}`);
@@ -2709,13 +2760,26 @@ class Paperback extends paperback_extensions_common_1.Source {
         const tagsResult = typeof tagsResponse.data === "string"
             ? JSON.parse(tagsResponse.data)
             : tagsResponse.data;
+        const collectionResult = typeof collectionResponse.data === "string"
+            ? JSON.parse(collectionResponse.data)
+            : collectionResponse.data;
+        const libraryResult = typeof libraryResponse.data === "string"
+            ? JSON.parse(libraryResponse.data)
+            : libraryResponse.data;
         const tagSections = [
             createTagSection({ id: "0", label: "genres", tags: [] }),
             createTagSection({ id: "1", label: "tags", tags: [] }),
+            createTagSection({ id: "2", label: "collections", tags: [] }),
+            createTagSection({ id: "3", label: "libraries", tags: [] }),
         ];
         // For each tag, we append a type identifier to its id and capitalize its label
         tagSections[0].tags = genresResult.map((elem) => createTag({ id: "genre-" + elem, label: (0, exports.capitalize)(elem) }));
         tagSections[1].tags = tagsResult.map((elem) => createTag({ id: "tag-" + elem, label: (0, exports.capitalize)(elem) }));
+        tagSections[2].tags = collectionResult.content.map((elem) => createTag({ id: "collection-" + elem.id, label: (0, exports.capitalize)(elem.name) }));
+        tagSections[3].tags = libraryResult.map((elem) => createTag({ id: "library-" + elem.id, label: (0, exports.capitalize)(elem.name) }));
+        if (collectionResult.content.length <= 1) {
+            tagSections.splice(2, 1);
+        }
         return tagSections;
     }
     async getMangaDetails(mangaId) {
@@ -2724,7 +2788,7 @@ class Paperback extends paperback_extensions_common_1.Source {
                 */
         const komgaAPI = await (0, Common_1.getKomgaAPI)(this.stateManager);
         const request = createRequestObject({
-            url: `${komgaAPI}/series/${mangaId}/`,
+            url: `${komgaAPI}/series/${mangaId}`,
             method: "GET",
         });
         const response = await this.requestManager.schedule(request, 1);
@@ -2782,7 +2846,7 @@ class Paperback extends paperback_extensions_common_1.Source {
         const chapters = [];
         // Chapters language is only available on the serie page
         const serieRequest = createRequestObject({
-            url: `${komgaAPI}/series/${mangaId}/`,
+            url: `${komgaAPI}/series/${mangaId}`,
             method: "GET",
         });
         const serieResponse = await this.requestManager.schedule(serieRequest, 1);
@@ -2815,15 +2879,15 @@ class Paperback extends paperback_extensions_common_1.Source {
         const pages = [];
         for (const page of result) {
             if (SUPPORTED_IMAGE_TYPES.includes(page.mediaType)) {
-                pages.push(`${komgaAPI}/books/${chapterId}/pages/${page.number}`);
+                pages.push(`intercept*${komgaAPI}/books/${chapterId}/pages/${page.number}`);
             }
             else {
-                pages.push(`${komgaAPI}/books/${chapterId}/pages/${page.number}?convert=png`);
+                pages.push(`intercept*${komgaAPI}/books/${chapterId}/pages/${page.number}?convert=png`);
             }
         }
         // Determine the preferred reading direction which is only available in the serie metadata
         const serieRequest = createRequestObject({
-            url: `${komgaAPI}/series/${mangaId}/`,
+            url: `${komgaAPI}/series/${mangaId}`,
             method: "GET",
         });
         const serieResponse = await this.requestManager.schedule(serieRequest, 1);
@@ -2850,6 +2914,7 @@ class Paperback extends paperback_extensions_common_1.Source {
         // We won't use `await this.getKomgaAPI()` as we do not want to throw an error on
         // the homepage when server settings are not set
         const komgaAPI = await (0, Common_1.getKomgaAPI)(this.stateManager);
+        const { showOnDeck, showContinueReading } = await (0, Common_1.getOptions)(this.stateManager);
         if (komgaAPI === null) {
             console.log("searchRequest failed because server settings are unset");
             const section = createHomeSection({
@@ -2862,25 +2927,60 @@ class Paperback extends paperback_extensions_common_1.Source {
             return;
         }
         // The source define two homepage sections: new and latest
-        const sections = [
-            createHomeSection({
-                id: "new",
-                title: "Recently added series",
-                view_more: true,
-            }),
-            createHomeSection({
-                id: "updated",
-                title: "Recently updated series",
-                view_more: true,
-            }),
-        ];
+        const sections = [];
+        if (showOnDeck) {
+            sections.push(createHomeSection({
+                id: 'ondeck',
+                title: 'On Deck',
+                view_more: false,
+            }));
+        }
+        if (showContinueReading) {
+            sections.push(createHomeSection({
+                id: 'continue',
+                title: 'Continue Reading',
+                view_more: false,
+            }));
+        }
+        sections.push(createHomeSection({
+            id: 'new',
+            title: 'Recently added series',
+            //type: showRecentFeatured ? HomeSectionType.featured : HomeSectionType.singleRowNormal,
+            view_more: true,
+        }));
+        sections.push(createHomeSection({
+            id: 'updated',
+            title: 'Recently updated series',
+            view_more: true,
+        }));
         const promises = [];
         for (const section of sections) {
             // Let the app load empty tagSections
             sectionCallback(section);
+            let apiPath, thumbPath, params, idProp;
+            switch (section.id) {
+                case 'ondeck':
+                    apiPath = `${komgaAPI}/books/${section.id}`;
+                    thumbPath = `${komgaAPI}/books`;
+                    params = '?page=0&size=20&deleted=false';
+                    idProp = 'seriesId';
+                    break;
+                case 'continue':
+                    apiPath = `${komgaAPI}/books`;
+                    thumbPath = `${komgaAPI}/books`;
+                    params = '?sort=readProgress.readDate,desc&read_status=IN_PROGRESS&page=0&size=20&deleted=false';
+                    idProp = 'seriesId';
+                    break;
+                default:
+                    apiPath = `${komgaAPI}/series/${section.id}`;
+                    thumbPath = `${komgaAPI}/series`;
+                    params = '?page=0&size=20&deleted=false';
+                    idProp = 'id';
+                    break;
+            }
             const request = createRequestObject({
-                url: `${komgaAPI}/series/${section.id}`,
-                param: "?page=0&size=20&deleted=false",
+                url: apiPath,
+                param: params,
                 method: "GET",
             });
             // Get the section data
@@ -2889,9 +2989,9 @@ class Paperback extends paperback_extensions_common_1.Source {
                 const tiles = [];
                 for (const serie of result.content) {
                     tiles.push(createMangaTile({
-                        id: serie.id,
+                        id: serie[idProp],
                         title: createIconText({ text: serie.metadata.title }),
-                        image: `${komgaAPI}/series/${serie.id}/thumbnail`,
+                        image: `${thumbPath}/${serie.id}/thumbnail`,
                     }));
                 }
                 section.items = tiles;
@@ -2935,7 +3035,7 @@ class Paperback extends paperback_extensions_common_1.Source {
         let loadMore = true;
         while (loadMore) {
             const request = createRequestObject({
-                url: `${komgaAPI}/series/updated/`,
+                url: `${komgaAPI}/series/updated`,
                 param: `?page=${page}&size=${PAGE_SIZE}&deleted=false`,
                 method: "GET",
             });
@@ -3057,11 +3157,33 @@ const serverSettingsMenu = (stateManager) => {
                         // Fallback to default input field if the app version doesnt support
                         // SecureInputField
                         // @ts-ignore
-                        (createSecureInputField ?? createInputField)({
+                        (typeof createSecureInputField == 'undefined' ? createInputField : createSecureInputField)({
                             id: "serverPassword",
                             label: "Password",
                             placeholder: "Some Super Secret Password",
                             value: values.serverPassword
+                        }),
+                    ]),
+                }),
+                createSection({
+                    id: "sourceOptions",
+                    header: "Source Options",
+                    footer: "",
+                    rows: async () => (0, Common_1.retrieveStateData)(stateManager).then((values) => [
+                        createSwitch({
+                            id: 'showOnDeck',
+                            label: 'Show On Deck',
+                            value: values.showOnDeck,
+                        }),
+                        createSwitch({
+                            id: 'showContinueReading',
+                            label: 'Show Continue Reading',
+                            value: values.showContinueReading,
+                        }),
+                        createSwitch({
+                            id: 'orderResultsAlphabetically',
+                            label: 'Sort results alphabetically',
+                            value: values.orderResultsAlphabetically,
                         }),
                     ]),
                 }),

@@ -51,7 +51,7 @@ import {
 
 export const PaperbackInfo: SourceInfo = {
     version: "1.3.0",
-    name: "Paperback",
+    name: "Komga",
     icon: "icon.png",
     author: "Lemon | Faizan Durrani | Kussie",
     authorWebsite: "https://github.com/Kussie",

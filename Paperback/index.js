@@ -2619,11 +2619,11 @@ const Common_1 = require("./Common");
 //  - getTags() which is called on the homepage
 //  - search method which is called even if the user search in an other source
 exports.PaperbackInfo = {
-    version: "1.2.9",
+    version: "1.3.0",
     name: "Paperback",
     icon: "icon.png",
-    author: "Lemon | Faizan Durrani",
-    authorWebsite: "https://github.com/FramboisePi",
+    author: "Lemon | Faizan Durrani | Kussie",
+    authorWebsite: "https://github.com/Kussie",
     description: "Komga client extension for Paperback",
     contentRating: paperback_extensions_common_1.ContentRating.EVERYONE,
     websiteBaseURL: "https://komga.org",
